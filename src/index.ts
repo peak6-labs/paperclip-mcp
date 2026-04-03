@@ -71,15 +71,9 @@ server.tool(
 server.tool(
   "get_agent",
   "Get an agent by ID",
-  {
-    companyId: z.string().describe("Company ID"),
-    agentId: z.string().describe("Agent ID"),
-  },
-  async ({ companyId, agentId }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/agents/${agentId}`
-    );
+  { agentId: z.string().describe("Agent ID") },
+  async ({ agentId }) => {
+    const data = await paperclipFetch(config, `/api/agents/${agentId}`);
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
   }
 );
@@ -102,15 +96,9 @@ server.tool(
 server.tool(
   "get_project",
   "Get a project by ID",
-  {
-    companyId: z.string().describe("Company ID"),
-    projectId: z.string().describe("Project ID"),
-  },
-  async ({ companyId, projectId }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/projects/${projectId}`
-    );
+  { projectId: z.string().describe("Project ID") },
+  async ({ projectId }) => {
+    const data = await paperclipFetch(config, `/api/projects/${projectId}`);
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
   }
 );
@@ -137,15 +125,16 @@ server.tool(
 
 server.tool(
   "list_issues",
-  "List issues for a project",
+  "List issues for a company",
   {
     companyId: z.string().describe("Company ID"),
-    projectId: z.string().describe("Project ID"),
+    projectId: z.string().optional().describe("Filter by project ID"),
   },
   async ({ companyId, projectId }) => {
+    const query = projectId ? `?projectId=${projectId}` : "";
     const data = await paperclipFetch(
       config,
-      `/api/companies/${companyId}/projects/${projectId}/issues`
+      `/api/companies/${companyId}/issues${query}`
     );
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
   }
@@ -154,16 +143,9 @@ server.tool(
 server.tool(
   "get_issue",
   "Get an issue by ID",
-  {
-    companyId: z.string().describe("Company ID"),
-    projectId: z.string().describe("Project ID"),
-    issueId: z.string().describe("Issue ID"),
-  },
-  async ({ companyId, projectId, issueId }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/projects/${projectId}/issues/${issueId}`
-    );
+  { issueId: z.string().describe("Issue ID") },
+  async ({ issueId }) => {
+    const data = await paperclipFetch(config, `/api/issues/${issueId}`);
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
   }
 );
@@ -173,15 +155,18 @@ server.tool(
   "Create a new issue/task",
   {
     companyId: z.string().describe("Company ID"),
-    projectId: z.string().describe("Project ID"),
     title: z.string().describe("Issue title"),
     description: z.string().optional().describe("Issue description"),
-    assigneeId: z.string().optional().describe("Agent ID to assign"),
+    projectId: z.string().optional().describe("Project ID"),
+    assigneeAgentId: z.string().optional().describe("Agent ID to assign"),
+    assigneeUserId: z.string().optional().describe("User ID to assign"),
+    status: z.string().optional().describe("Issue status (backlog, todo, in_progress, done, cancelled)"),
+    priority: z.string().optional().describe("Issue priority (low, medium, high, urgent)"),
   },
-  async ({ companyId, projectId, ...body }) => {
+  async ({ companyId, ...body }) => {
     const data = await paperclipFetch(
       config,
-      `/api/companies/${companyId}/projects/${projectId}/issues`,
+      `/api/companies/${companyId}/issues`,
       { method: "POST", body: JSON.stringify(body) }
     );
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
@@ -230,7 +215,7 @@ server.tool(
   async ({ companyId }) => {
     const data = await paperclipFetch(
       config,
-      `/api/companies/${companyId}/costs`
+      `/api/companies/${companyId}/costs/summary`
     );
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
   }
@@ -270,14 +255,14 @@ server.tool(
   "approve",
   "Approve a pending approval",
   {
-    companyId: z.string().describe("Company ID"),
     approvalId: z.string().describe("Approval ID"),
+    comment: z.string().optional().describe("Approval comment"),
   },
-  async ({ companyId, approvalId }) => {
+  async ({ approvalId, comment }) => {
     const data = await paperclipFetch(
       config,
-      `/api/companies/${companyId}/approvals/${approvalId}/approve`,
-      { method: "POST" }
+      `/api/approvals/${approvalId}/approve`,
+      { method: "POST", body: JSON.stringify({ comment }) }
     );
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
   }
@@ -287,15 +272,14 @@ server.tool(
   "reject_approval",
   "Reject a pending approval",
   {
-    companyId: z.string().describe("Company ID"),
     approvalId: z.string().describe("Approval ID"),
     reason: z.string().optional().describe("Rejection reason"),
   },
-  async ({ companyId, approvalId, reason }) => {
+  async ({ approvalId, reason }) => {
     const data = await paperclipFetch(
       config,
-      `/api/companies/${companyId}/approvals/${approvalId}/reject`,
-      { method: "POST", body: JSON.stringify({ reason }) }
+      `/api/approvals/${approvalId}/reject`,
+      { method: "POST", body: JSON.stringify({ comment: reason }) }
     );
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
   }
