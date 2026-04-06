@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer } from "node:http";
 import { z } from "zod";
@@ -235,10 +236,6 @@ function registerTools(s: McpServer) {
   );
 }
 
-// Register tools on the main server instance (used by streamable HTTP and stdio)
-const server = new McpServer({ name: "paperclip-mcp", version: "0.1.0" });
-registerTools(server);
-
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 const mode = process.env.MCP_TRANSPORT ?? "stdio";
@@ -274,14 +271,9 @@ function readBody(req: import("node:http").IncomingMessage): Promise<string> {
 
 if (mode === "http") {
   // Session tracking for both transports
+  const streamableSessions = new Map<string, { transport: InstanceType<typeof StreamableHTTPServerTransport>; context: RequestContext }>();
   const sseTransports = new Map<string, InstanceType<typeof SSEServerTransport>>();
   const sessionContexts = new Map<string, RequestContext>();
-
-  // Streamable HTTP transport (protocol version 2025-11-25)
-  const streamableTransport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => crypto.randomUUID(),
-  });
-  await server.connect(streamableTransport);
 
   const httpServer = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
@@ -298,7 +290,42 @@ if (mode === "http") {
     if (pathname === "/mcp") {
       if (!checkAuth(req, res)) return;
       const ctx = extractContext(req);
-      requestContext.run(ctx, () => streamableTransport.handleRequest(req, res));
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+
+      // Existing session — route to its transport
+      if (sessionId && streamableSessions.has(sessionId)) {
+        const session = streamableSessions.get(sessionId)!;
+        await requestContext.run(session.context, () => session.transport.handleRequest(req, res));
+        return;
+      }
+
+      // New session — must be an initialize request
+      const body = await readBody(req);
+      const parsed = JSON.parse(body);
+      if (!isInitializeRequest(parsed)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Bad Request: No valid session and not an initialize request" }, id: null }));
+        return;
+      }
+
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => crypto.randomUUID(),
+        onsessioninitialized: (id) => {
+          streamableSessions.set(id, { transport, context: ctx });
+          console.error(`Streamable HTTP session initialized: ${id}`);
+        },
+      });
+      transport.onclose = () => {
+        if (transport.sessionId) {
+          streamableSessions.delete(transport.sessionId);
+          console.error(`Streamable HTTP session closed: ${transport.sessionId}`);
+        }
+      };
+
+      const sessionServer = new McpServer({ name: "paperclip-mcp", version: "0.1.0" });
+      registerTools(sessionServer);
+      await requestContext.run(ctx, () => sessionServer.connect(transport));
+      await requestContext.run(ctx, () => transport.handleRequest(req, res, parsed));
       return;
     }
 
@@ -356,6 +383,8 @@ if (mode === "http") {
     console.error(`  SSE (legacy):    GET /sse + POST /messages`);
   });
 } else {
+  const server = new McpServer({ name: "paperclip-mcp", version: "0.1.0" });
+  registerTools(server);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
