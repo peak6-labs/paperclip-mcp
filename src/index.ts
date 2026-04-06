@@ -8,6 +8,9 @@ const config: PaperclipConfig = {
   apiKey: process.env.PAPERCLIP_API_KEY,
 };
 
+const agentId = process.env.PAPERCLIP_AGENT_ID;
+const companyId = process.env.PAPERCLIP_COMPANY_ID;
+
 const server = new McpServer({
   name: "paperclip-mcp",
   version: "0.1.0",
@@ -296,6 +299,41 @@ server.tool(
       config,
       `/api/companies/${companyId}/dashboard`
     );
+    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  }
+);
+
+// ── Plugin Tools ─────────────────────────────────────────────────────────────
+
+server.tool(
+  "list_plugin_tools",
+  "List all available plugin-contributed tools (e.g., x-intelligence search, analysis, trending). Use this to discover what tools are available before calling execute_plugin_tool.",
+  {},
+  async () => {
+    const data = await paperclipFetch(config, "/api/plugins/tools");
+    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+  }
+);
+
+server.tool(
+  "execute_plugin_tool",
+  "Execute a plugin tool by its fully namespaced name (e.g., 'peak6-labs.x-intelligence:search-x'). Call list_plugin_tools first to discover available tools and their parameter schemas.",
+  {
+    tool: z.string().describe("Fully namespaced tool name (e.g., 'peak6-labs.x-intelligence:search-x')"),
+    parameters: z.string().optional().describe("Tool parameters as a JSON string — check list_plugin_tools for the schema"),
+  },
+  async ({ tool, parameters }) => {
+    const parsed = parameters ? JSON.parse(parameters) : {};
+    const runContext: Record<string, string> = {
+      runId: crypto.randomUUID(),
+    };
+    if (agentId) runContext.agentId = agentId;
+    if (companyId) runContext.companyId = companyId;
+
+    const data = await paperclipFetch(config, "/api/plugins/tools/execute", {
+      method: "POST",
+      body: JSON.stringify({ tool, parameters: parsed, runContext }),
+    });
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
   }
 );
