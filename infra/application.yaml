@@ -1,0 +1,8 @@
+apiVersion: infra.peak6.com/v1
+kind: Application
+metadata:
+  name: paperclip-mcp
+  team: p6strat
+spec:
+  displayName: Paperclip MCP Server
+  description: MCP server proxying Paperclip plugin tools for OpenClaw agents

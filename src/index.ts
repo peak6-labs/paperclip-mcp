@@ -1,376 +1,359 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createServer } from "node:http";
 import { z } from "zod";
 import { paperclipFetch, type PaperclipConfig } from "./client.js";
 
-const config: PaperclipConfig = {
+const defaultConfig: PaperclipConfig = {
   baseUrl: process.env.PAPERCLIP_BASE_URL ?? "http://localhost:3100",
   apiKey: process.env.PAPERCLIP_API_KEY,
 };
 
-const agentId = process.env.PAPERCLIP_AGENT_ID;
-const companyId = process.env.PAPERCLIP_COMPANY_ID;
-const projectId = process.env.PAPERCLIP_PROJECT_ID;
+const defaultAgentId = process.env.PAPERCLIP_AGENT_ID;
+const defaultCompanyId = process.env.PAPERCLIP_COMPANY_ID;
+const defaultProjectId = process.env.PAPERCLIP_PROJECT_ID;
 
-const server = new McpServer({
-  name: "paperclip-mcp",
-  version: "0.1.0",
-});
+interface RequestContext {
+  agentId?: string;
+  companyId?: string;
+  projectId?: string;
+  apiKey?: string;
+}
 
-// ── Health ────────────────────────────────────────────────────────────────────
+const requestContext = new AsyncLocalStorage<RequestContext>();
 
-server.tool("health_check", "Check Paperclip server health", {}, async () => {
-  const data = await paperclipFetch(config, "/api/health");
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-});
+function getContext(): RequestContext {
+  const ctx = requestContext.getStore();
+  return {
+    agentId: ctx?.agentId ?? defaultAgentId,
+    companyId: ctx?.companyId ?? defaultCompanyId,
+    projectId: ctx?.projectId ?? defaultProjectId,
+    apiKey: ctx?.apiKey ?? defaultConfig.apiKey,
+  };
+}
 
-// ── Companies ─────────────────────────────────────────────────────────────────
+function getConfig(): PaperclipConfig {
+  const ctx = getContext();
+  return { baseUrl: defaultConfig.baseUrl, apiKey: ctx.apiKey };
+}
 
-server.tool("list_companies", "List all companies", {}, async () => {
-  const data = await paperclipFetch(config, "/api/companies");
-  return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-});
-
-server.tool(
-  "get_company",
-  "Get a company by ID",
-  { companyId: z.string().describe("Company ID") },
-  async ({ companyId }) => {
-    const data = await paperclipFetch(config, `/api/companies/${companyId}`);
+function registerTools(s: McpServer) {
+  s.tool("health_check", "Check Paperclip server health", {}, async () => {
+    const data = await paperclipFetch(getConfig(), "/api/health");
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  });
 
-server.tool(
-  "create_company",
-  "Create a new company",
-  {
-    name: z.string().describe("Company name"),
-    description: z.string().optional().describe("Company description"),
-  },
-  async (args) => {
-    const data = await paperclipFetch(config, "/api/companies", {
-      method: "POST",
-      body: JSON.stringify(args),
-    });
+  s.tool("list_companies", "List all companies", {}, async () => {
+    const data = await paperclipFetch(getConfig(), "/api/companies");
     return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  });
 
-// ── Agents ────────────────────────────────────────────────────────────────────
+  s.tool("get_company", "Get a company by ID",
+    { companyId: z.string().describe("Company ID") },
+    async ({ companyId }) => {
+      const data = await paperclipFetch(getConfig(), `/api/companies/${companyId}`);
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "list_agents",
-  "List agents for a company",
-  { companyId: z.string().describe("Company ID") },
-  async ({ companyId }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/agents`
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("create_company", "Create a new company",
+    { name: z.string().describe("Company name"), description: z.string().optional().describe("Company description") },
+    async (args) => {
+      const data = await paperclipFetch(getConfig(), "/api/companies", { method: "POST", body: JSON.stringify(args) });
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "get_agent",
-  "Get an agent by ID",
-  { agentId: z.string().describe("Agent ID") },
-  async ({ agentId }) => {
-    const data = await paperclipFetch(config, `/api/agents/${agentId}`);
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("list_agents", "List agents for a company",
+    { companyId: z.string().describe("Company ID") },
+    async ({ companyId }) => {
+      const data = await paperclipFetch(getConfig(), `/api/companies/${companyId}/agents`);
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-// ── Projects ──────────────────────────────────────────────────────────────────
+  s.tool("get_agent", "Get an agent by ID",
+    { agentId: z.string().describe("Agent ID") },
+    async ({ agentId }) => {
+      const data = await paperclipFetch(getConfig(), `/api/agents/${agentId}`);
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "list_projects",
-  "List projects for a company",
-  { companyId: z.string().describe("Company ID") },
-  async ({ companyId }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/projects`
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("list_projects", "List projects for a company",
+    { companyId: z.string().describe("Company ID") },
+    async ({ companyId }) => {
+      const data = await paperclipFetch(getConfig(), `/api/companies/${companyId}/projects`);
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "get_project",
-  "Get a project by ID",
-  { projectId: z.string().describe("Project ID") },
-  async ({ projectId }) => {
-    const data = await paperclipFetch(config, `/api/projects/${projectId}`);
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("get_project", "Get a project by ID",
+    { projectId: z.string().describe("Project ID") },
+    async ({ projectId }) => {
+      const data = await paperclipFetch(getConfig(), `/api/projects/${projectId}`);
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "create_project",
-  "Create a new project",
-  {
-    companyId: z.string().describe("Company ID"),
-    name: z.string().describe("Project name"),
-    description: z.string().optional().describe("Project description"),
-  },
-  async ({ companyId, ...body }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/projects`,
-      { method: "POST", body: JSON.stringify(body) }
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("create_project", "Create a new project",
+    { companyId: z.string().describe("Company ID"), name: z.string().describe("Project name"), description: z.string().optional().describe("Project description") },
+    async ({ companyId, ...body }) => {
+      const data = await paperclipFetch(getConfig(), `/api/companies/${companyId}/projects`, { method: "POST", body: JSON.stringify(body) });
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-// ── Issues ────────────────────────────────────────────────────────────────────
+  s.tool("list_issues", "List issues for a company",
+    { companyId: z.string().describe("Company ID"), projectId: z.string().optional().describe("Filter by project ID") },
+    async ({ companyId, projectId }) => {
+      const query = projectId ? `?projectId=${projectId}` : "";
+      const data = await paperclipFetch(getConfig(), `/api/companies/${companyId}/issues${query}`);
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "list_issues",
-  "List issues for a company",
-  {
-    companyId: z.string().describe("Company ID"),
-    projectId: z.string().optional().describe("Filter by project ID"),
-  },
-  async ({ companyId, projectId }) => {
-    const query = projectId ? `?projectId=${projectId}` : "";
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/issues${query}`
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("get_issue", "Get an issue by ID",
+    { issueId: z.string().describe("Issue ID") },
+    async ({ issueId }) => {
+      const data = await paperclipFetch(getConfig(), `/api/issues/${issueId}`);
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "get_issue",
-  "Get an issue by ID",
-  { issueId: z.string().describe("Issue ID") },
-  async ({ issueId }) => {
-    const data = await paperclipFetch(config, `/api/issues/${issueId}`);
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("create_issue", "Create a new issue/task",
+    {
+      companyId: z.string().describe("Company ID"), title: z.string().describe("Issue title"),
+      description: z.string().optional().describe("Issue description"), projectId: z.string().optional().describe("Project ID"),
+      assigneeAgentId: z.string().optional().describe("Agent ID to assign"), assigneeUserId: z.string().optional().describe("User ID to assign"),
+      status: z.string().optional().describe("Issue status (backlog, todo, in_progress, done, cancelled)"),
+      priority: z.string().optional().describe("Issue priority (low, medium, high, urgent)"),
+    },
+    async ({ companyId, ...body }) => {
+      const data = await paperclipFetch(getConfig(), `/api/companies/${companyId}/issues`, { method: "POST", body: JSON.stringify(body) });
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "create_issue",
-  "Create a new issue/task",
-  {
-    companyId: z.string().describe("Company ID"),
-    title: z.string().describe("Issue title"),
-    description: z.string().optional().describe("Issue description"),
-    projectId: z.string().optional().describe("Project ID"),
-    assigneeAgentId: z.string().optional().describe("Agent ID to assign"),
-    assigneeUserId: z.string().optional().describe("User ID to assign"),
-    status: z.string().optional().describe("Issue status (backlog, todo, in_progress, done, cancelled)"),
-    priority: z.string().optional().describe("Issue priority (low, medium, high, urgent)"),
-  },
-  async ({ companyId, ...body }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/issues`,
-      { method: "POST", body: JSON.stringify(body) }
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("list_goals", "List goals for a company",
+    { companyId: z.string().describe("Company ID") },
+    async ({ companyId }) => {
+      const data = await paperclipFetch(getConfig(), `/api/companies/${companyId}/goals`);
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-// ── Goals ─────────────────────────────────────────────────────────────────────
+  s.tool("create_goal", "Create a new goal",
+    { companyId: z.string().describe("Company ID"), title: z.string().describe("Goal title"), description: z.string().optional().describe("Goal description") },
+    async ({ companyId, ...body }) => {
+      const data = await paperclipFetch(getConfig(), `/api/companies/${companyId}/goals`, { method: "POST", body: JSON.stringify(body) });
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "list_goals",
-  "List goals for a company",
-  { companyId: z.string().describe("Company ID") },
-  async ({ companyId }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/goals`
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("get_costs", "Get cost summary for a company",
+    { companyId: z.string().describe("Company ID") },
+    async ({ companyId }) => {
+      const data = await paperclipFetch(getConfig(), `/api/companies/${companyId}/costs/summary`);
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "create_goal",
-  "Create a new goal",
-  {
-    companyId: z.string().describe("Company ID"),
-    title: z.string().describe("Goal title"),
-    description: z.string().optional().describe("Goal description"),
-  },
-  async ({ companyId, ...body }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/goals`,
-      { method: "POST", body: JSON.stringify(body) }
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("get_activity", "Get recent activity for a company",
+    { companyId: z.string().describe("Company ID") },
+    async ({ companyId }) => {
+      const data = await paperclipFetch(getConfig(), `/api/companies/${companyId}/activity`);
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-// ── Costs ─────────────────────────────────────────────────────────────────────
+  s.tool("list_approvals", "List pending approvals for a company",
+    { companyId: z.string().describe("Company ID") },
+    async ({ companyId }) => {
+      const data = await paperclipFetch(getConfig(), `/api/companies/${companyId}/approvals`);
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "get_costs",
-  "Get cost summary for a company",
-  { companyId: z.string().describe("Company ID") },
-  async ({ companyId }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/costs/summary`
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("approve", "Approve a pending approval",
+    { approvalId: z.string().describe("Approval ID"), comment: z.string().optional().describe("Approval comment") },
+    async ({ approvalId, comment }) => {
+      const data = await paperclipFetch(getConfig(), `/api/approvals/${approvalId}/approve`, { method: "POST", body: JSON.stringify({ comment }) });
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-// ── Activity ──────────────────────────────────────────────────────────────────
+  s.tool("reject_approval", "Reject a pending approval",
+    { approvalId: z.string().describe("Approval ID"), reason: z.string().optional().describe("Rejection reason") },
+    async ({ approvalId, reason }) => {
+      const data = await paperclipFetch(getConfig(), `/api/approvals/${approvalId}/reject`, { method: "POST", body: JSON.stringify({ comment: reason }) });
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "get_activity",
-  "Get recent activity for a company",
-  { companyId: z.string().describe("Company ID") },
-  async ({ companyId }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/activity`
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("get_dashboard", "Get dashboard summary for a company",
+    { companyId: z.string().describe("Company ID") },
+    async ({ companyId }) => {
+      const data = await paperclipFetch(getConfig(), `/api/companies/${companyId}/dashboard`);
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-// ── Approvals ─────────────────────────────────────────────────────────────────
+  s.tool("list_plugin_tools",
+    "List all available plugin-contributed tools (e.g., x-intelligence search, analysis, trending). Use this to discover what tools are available before calling execute_plugin_tool.",
+    {},
+    async () => {
+      const data = await paperclipFetch(getConfig(), "/api/plugins/tools");
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
 
-server.tool(
-  "list_approvals",
-  "List pending approvals for a company",
-  { companyId: z.string().describe("Company ID") },
-  async ({ companyId }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/approvals`
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+  s.tool("execute_plugin_tool",
+    "Execute a plugin tool by its fully namespaced name (e.g., 'peak6-labs.x-intelligence:search-x'). Call list_plugin_tools first to discover available tools and their parameter schemas.",
+    {
+      tool: z.string().describe("Fully namespaced tool name (e.g., 'peak6-labs.x-intelligence:search-x')"),
+      parameters: z.string().optional().describe("Tool parameters as a JSON string — check list_plugin_tools for the schema"),
+    },
+    async ({ tool, parameters }) => {
+      const parsed = parameters ? JSON.parse(parameters) : {};
+      const ctx = getContext();
+      const runContext: Record<string, string> = {
+        runId: process.env.PAPERCLIP_RUN_ID ?? crypto.randomUUID(),
+      };
+      if (ctx.agentId) runContext.agentId = ctx.agentId;
+      if (ctx.companyId) runContext.companyId = ctx.companyId;
+      if (ctx.projectId) runContext.projectId = ctx.projectId;
+      const data = await paperclipFetch(getConfig(), "/api/plugins/tools/execute", {
+        method: "POST",
+        body: JSON.stringify({ tool, parameters: parsed, runContext }),
+      });
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+}
 
-server.tool(
-  "approve",
-  "Approve a pending approval",
-  {
-    approvalId: z.string().describe("Approval ID"),
-    comment: z.string().optional().describe("Approval comment"),
-  },
-  async ({ approvalId, comment }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/approvals/${approvalId}/approve`,
-      { method: "POST", body: JSON.stringify({ comment }) }
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
-
-server.tool(
-  "reject_approval",
-  "Reject a pending approval",
-  {
-    approvalId: z.string().describe("Approval ID"),
-    reason: z.string().optional().describe("Rejection reason"),
-  },
-  async ({ approvalId, reason }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/approvals/${approvalId}/reject`,
-      { method: "POST", body: JSON.stringify({ comment: reason }) }
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
-
-// ── Dashboard ─────────────────────────────────────────────────────────────────
-
-server.tool(
-  "get_dashboard",
-  "Get dashboard summary for a company",
-  { companyId: z.string().describe("Company ID") },
-  async ({ companyId }) => {
-    const data = await paperclipFetch(
-      config,
-      `/api/companies/${companyId}/dashboard`
-    );
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
-
-// ── Plugin Tools ─────────────────────────────────────────────────────────────
-
-server.tool(
-  "list_plugin_tools",
-  "List all available plugin-contributed tools (e.g., x-intelligence search, analysis, trending). Use this to discover what tools are available before calling execute_plugin_tool.",
-  {},
-  async () => {
-    const data = await paperclipFetch(config, "/api/plugins/tools");
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
-
-server.tool(
-  "execute_plugin_tool",
-  "Execute a plugin tool by its fully namespaced name (e.g., 'peak6-labs.x-intelligence:search-x'). Call list_plugin_tools first to discover available tools and their parameter schemas.",
-  {
-    tool: z.string().describe("Fully namespaced tool name (e.g., 'peak6-labs.x-intelligence:search-x')"),
-    parameters: z.string().optional().describe("Tool parameters as a JSON string — check list_plugin_tools for the schema"),
-  },
-  async ({ tool, parameters }) => {
-    const parsed = parameters ? JSON.parse(parameters) : {};
-    const runContext: Record<string, string> = {
-      runId: process.env.PAPERCLIP_RUN_ID ?? crypto.randomUUID(),
-    };
-    if (agentId) runContext.agentId = agentId;
-    if (companyId) runContext.companyId = companyId;
-    if (projectId) runContext.projectId = projectId;
-
-    const data = await paperclipFetch(config, "/api/plugins/tools/execute", {
-      method: "POST",
-      body: JSON.stringify({ tool, parameters: parsed, runContext }),
-    });
-    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
-  }
-);
+// Register tools on the main server instance (used by streamable HTTP and stdio)
+const server = new McpServer({ name: "paperclip-mcp", version: "0.1.0" });
+registerTools(server);
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 const mode = process.env.MCP_TRANSPORT ?? "stdio";
 const port = parseInt(process.env.PORT ?? "3000", 10);
+const authToken = process.env.MCP_AUTH_TOKEN;
+
+function checkAuth(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse): boolean {
+  if (!authToken) return true;
+  const provided = req.headers.authorization?.replace(/^Bearer\s+/i, "");
+  if (provided === authToken) return true;
+  res.writeHead(401, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ error: "Unauthorized" }));
+  return false;
+}
+
+function extractContext(req: import("node:http").IncomingMessage): RequestContext {
+  return {
+    agentId: (req.headers["x-agent-id"] as string) ?? undefined,
+    companyId: (req.headers["x-company-id"] as string) ?? undefined,
+    projectId: (req.headers["x-project-id"] as string) ?? undefined,
+    apiKey: (req.headers["x-paperclip-api-key"] as string) ?? undefined,
+  };
+}
+
+function readBody(req: import("node:http").IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk: Buffer) => { body += chunk.toString(); });
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
+  });
+}
 
 if (mode === "http") {
-  const transport = new StreamableHTTPServerTransport({
+  // Session tracking for both transports
+  const sseTransports = new Map<string, InstanceType<typeof SSEServerTransport>>();
+  const sessionContexts = new Map<string, RequestContext>();
+
+  // Streamable HTTP transport (protocol version 2025-11-25)
+  const streamableTransport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
   });
-  await server.connect(transport);
+  await server.connect(streamableTransport);
 
-  const httpServer = createServer((req, res) => {
-    // Health check
-    if (req.url === "/health" && req.method === "GET") {
+  const httpServer = createServer(async (req, res) => {
+    const url = new URL(req.url ?? "/", `http://localhost:${port}`);
+    const pathname = url.pathname;
+
+    // Health check (no auth)
+    if (pathname === "/health" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "ok" }));
       return;
     }
-    // MCP endpoint
-    if (req.url?.startsWith("/mcp")) {
-      transport.handleRequest(req, res);
+
+    // ── Streamable HTTP transport: /mcp ────────────────────────────────────
+    if (pathname === "/mcp") {
+      if (!checkAuth(req, res)) return;
+      const ctx = extractContext(req);
+      requestContext.run(ctx, () => streamableTransport.handleRequest(req, res));
       return;
     }
+
+    // ── SSE transport (deprecated but needed for OpenClaw): /sse + /messages
+    if (pathname === "/sse" && req.method === "GET") {
+      if (!checkAuth(req, res)) return;
+      try {
+        const transport = new SSEServerTransport("/messages", res);
+        const ctx = extractContext(req);
+        sessionContexts.set(transport.sessionId, ctx);
+        sseTransports.set(transport.sessionId, transport);
+        res.on("close", () => {
+          sessionContexts.delete(transport.sessionId);
+          sseTransports.delete(transport.sessionId);
+        });
+        const sessionServer = new McpServer({ name: "paperclip-mcp", version: "0.1.0" });
+        registerTools(sessionServer);
+        await requestContext.run(ctx, () => sessionServer.connect(transport));
+      } catch (err) {
+        console.error("SSE handler error:", err);
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: String(err) }));
+        }
+      }
+      return;
+    }
+
+    if (pathname === "/messages" && req.method === "POST") {
+      const sessionId = url.searchParams.get("sessionId");
+      if (!sessionId) {
+        res.writeHead(400);
+        res.end("Missing sessionId");
+        return;
+      }
+      const transport = sseTransports.get(sessionId);
+      if (!transport) {
+        res.writeHead(400);
+        res.end("Unknown session");
+        return;
+      }
+      const ctx = sessionContexts.get(sessionId) ?? {};
+      const body = await readBody(req);
+      await requestContext.run(ctx, () => transport.handlePostMessage(req, res, JSON.parse(body)));
+      return;
+    }
+
     res.writeHead(404);
     res.end("Not found");
   });
 
   httpServer.listen(port, () => {
-    console.error(`Paperclip MCP server (HTTP) listening on port ${port}`);
+    console.error(`Paperclip MCP server listening on port ${port}`);
+    console.error(`  Streamable HTTP: /mcp`);
+    console.error(`  SSE (legacy):    GET /sse + POST /messages`);
   });
 } else {
   const transport = new StdioServerTransport();

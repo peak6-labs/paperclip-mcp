@@ -1,0 +1,10 @@
+apiVersion: infra.peak6.com/v1
+kind: Environment
+metadata:
+  name: prod
+  team: p6strat
+  application: paperclip-mcp
+spec:
+  environmentClass: production
+  labels:
+    managed-by: envctl
