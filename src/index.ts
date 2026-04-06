@@ -299,12 +299,33 @@ if (mode === "http") {
         return;
       }
 
-      // New session — must be an initialize request
-      const body = await readBody(req);
-      const parsed = JSON.parse(body);
+      // Unknown/stale session ID — client must re-initialize
+      if (sessionId) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Session not found" }, id: null }));
+        return;
+      }
+
+      // No session ID — only POST with initialize request can create a new session
+      if (req.method !== "POST") {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32600, message: "Bad Request: session required" }, id: null }));
+        return;
+      }
+
+      let parsed: unknown;
+      try {
+        const body = await readBody(req);
+        parsed = JSON.parse(body);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" }, id: null }));
+        return;
+      }
+
       if (!isInitializeRequest(parsed)) {
         res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Bad Request: No valid session and not an initialize request" }, id: null }));
+        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32600, message: "Bad Request: expected initialize request" }, id: null }));
         return;
       }
 
