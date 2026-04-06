@@ -10,6 +10,7 @@ const config: PaperclipConfig = {
 
 const agentId = process.env.PAPERCLIP_AGENT_ID;
 const companyId = process.env.PAPERCLIP_COMPANY_ID;
+const projectId = process.env.PAPERCLIP_PROJECT_ID;
 
 const server = new McpServer({
   name: "paperclip-mcp",
@@ -325,10 +326,11 @@ server.tool(
   async ({ tool, parameters }) => {
     const parsed = parameters ? JSON.parse(parameters) : {};
     const runContext: Record<string, string> = {
-      runId: crypto.randomUUID(),
+      runId: process.env.PAPERCLIP_RUN_ID ?? crypto.randomUUID(),
     };
     if (agentId) runContext.agentId = agentId;
     if (companyId) runContext.companyId = companyId;
+    if (projectId) runContext.projectId = projectId;
 
     const data = await paperclipFetch(config, "/api/plugins/tools/execute", {
       method: "POST",
