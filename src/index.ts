@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createServer } from "node:http";
 import { z } from "zod";
 import { paperclipFetch, type PaperclipConfig } from "./client.js";
 
@@ -342,5 +344,35 @@ server.tool(
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+const mode = process.env.MCP_TRANSPORT ?? "stdio";
+const port = parseInt(process.env.PORT ?? "3000", 10);
+
+if (mode === "http") {
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => crypto.randomUUID(),
+  });
+  await server.connect(transport);
+
+  const httpServer = createServer((req, res) => {
+    // Health check
+    if (req.url === "/health" && req.method === "GET") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+    // MCP endpoint
+    if (req.url?.startsWith("/mcp")) {
+      transport.handleRequest(req, res);
+      return;
+    }
+    res.writeHead(404);
+    res.end("Not found");
+  });
+
+  httpServer.listen(port, () => {
+    console.error(`Paperclip MCP server (HTTP) listening on port ${port}`);
+  });
+} else {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
